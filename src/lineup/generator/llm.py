@@ -197,8 +197,17 @@ Generate 3-5 test cases for this page. Return JSON with this structure:
             try:
                 result = await self.client.generate_json(prompt, SYSTEM_PROMPT_GENERATOR)
 
-                cases = result.get("test_cases", []) if isinstance(result, dict) else result
+                if isinstance(result, dict):
+                    cases = result.get("test_cases", [])
+                elif isinstance(result, list):
+                    cases = result
+                else:
+                    console.print(f"    [red]Generation failed: unexpected response type ({type(result).__name__})[/]")
+                    continue
+
                 for tc_data in cases:
+                    if not isinstance(tc_data, dict):
+                        continue
                     actions = [
                         TestAction(
                             action=a.get("action", ""),
@@ -207,6 +216,7 @@ Generate 3-5 test cases for this page. Return JSON with this structure:
                             description=a.get("description", ""),
                         )
                         for a in tc_data.get("actions", [])
+                        if isinstance(a, dict)
                     ]
 
                     test_case = TestCase(
@@ -289,10 +299,18 @@ Return JSON:
 
         try:
             result = await self.client.generate_json(prompt, SYSTEM_PROMPT_ANALYZER)
-            bugs_data = result.get("bugs", []) if isinstance(result, dict) else result
+            if isinstance(result, dict):
+                bugs_data = result.get("bugs", [])
+            elif isinstance(result, list):
+                bugs_data = result
+            else:
+                console.print(f"  [red]Analysis failed: unexpected response type ({type(result).__name__})[/]")
+                return []
 
             bugs = []
             for bd in bugs_data:
+                if not isinstance(bd, dict):
+                    continue
                 bug = Bug(
                     id=f"bug-{uuid.uuid4().hex[:8]}",
                     title=bd.get("title", "Unknown bug"),
