@@ -1,0 +1,29 @@
+[project]
+name = "lineup"
+version = "0.1.0"
+description = "Autonomous testing platform — POC"
+requires-python = ">=3.11"
+dependencies = [
+    "playwright>=1.49",
+    "httpx>=0.27",
+    "pydantic>=2.0",
+    "rich>=13.0",
+    "click>=8.1",
+]
+
+[project.scripts]
+lineup = "lineup.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lineup"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "SIM"]
