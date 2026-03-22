@@ -50,6 +50,18 @@ class ExplorerConfig:
 
 
 @dataclass
+class GeminiConfig:
+    api_key: str = field(
+        default_factory=lambda: os.getenv("GOOGLE_API_KEY", "")
+    )
+    model: str = field(
+        default_factory=lambda: os.getenv("LINEUP_GEMINI_MODEL", "gemini-2.5-flash")
+    )
+    max_tokens: int = 4096
+    temperature: float = 0.1
+
+
+@dataclass
 class ClaudeConfig:
     api_key: str = field(
         default_factory=lambda: os.getenv("ANTHROPIC_API_KEY", "")
@@ -68,6 +80,7 @@ class ScanConfig:
     )
     ollama: OllamaConfig = field(default_factory=OllamaConfig)
     claude: ClaudeConfig = field(default_factory=ClaudeConfig)
+    gemini: GeminiConfig = field(default_factory=GeminiConfig)
     browser: BrowserConfig = field(default_factory=BrowserConfig)
     explorer: ExplorerConfig = field(default_factory=ExplorerConfig)
     output_dir: str = field(

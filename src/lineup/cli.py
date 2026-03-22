@@ -33,7 +33,7 @@ def main() -> None:
 @click.option("--output", default="./lineup-output", help="Output directory")
 @click.option("--headed", is_flag=True, help="Run browser in visible mode")
 @click.option("--ollama-url", default=None, help="Ollama API URL (default: http://localhost:11434)")
-@click.option("--provider", default=None, type=click.Choice(["ollama", "claude"]), help="LLM provider (default: ollama)")
+@click.option("--provider", default=None, type=click.Choice(["ollama", "claude", "gemini"]), help="LLM provider (default: ollama)")
 def scan(
     url: str,
     model: str | None,
@@ -58,6 +58,8 @@ def scan(
     if model:
         if config.provider == "claude":
             config.claude.model = model
+        elif config.provider == "gemini":
+            config.gemini.model = model
         else:
             config.ollama.model = model
     if headed:

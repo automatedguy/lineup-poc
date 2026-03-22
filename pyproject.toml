@@ -10,6 +10,7 @@ dependencies = [
     "rich>=13.0",
     "click>=8.1",
     "anthropic>=0.42",
+    "google-genai>=1.0",
 ]
 
 [project.scripts]

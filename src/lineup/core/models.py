@@ -11,7 +11,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class Severity(str, Enum):
@@ -80,6 +80,14 @@ class TestAction(BaseModel):
     selector: str | None = None
     value: str | None = None
     description: str = ""
+
+    @field_validator("value", mode="before")
+    @classmethod
+    def coerce_value_to_str(cls, v: Any) -> str | None:
+        """LLMs sometimes return integers or booleans for value; coerce to str."""
+        if v is None:
+            return None
+        return str(v)
 
 
 class TestCase(BaseModel):

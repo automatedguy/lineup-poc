@@ -8,6 +8,7 @@ it defines the quality of generated tests.
 from __future__ import annotations
 
 import json
+import re
 import uuid
 
 import httpx
@@ -27,6 +28,58 @@ from lineup.core.models import (
 from lineup.core.interfaces import BugAnalyzer
 
 console = Console()
+
+
+def parse_llm_json(raw: str) -> dict | list:
+    """Best-effort JSON extraction from an LLM response.
+
+    Handles common issues:
+    - Markdown code blocks (```json ... ```)
+    - Leading/trailing prose around the JSON
+    - Truncated JSON (unclosed braces/brackets) from hitting max_tokens
+    """
+    # 1. Direct parse
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+
+    # 2. Extract from markdown code blocks
+    cleaned = raw
+    if "```json" in cleaned:
+        cleaned = cleaned.split("```json")[1].split("```")[0]
+    elif "```" in cleaned:
+        cleaned = cleaned.split("```")[1].split("```")[0]
+
+    try:
+        return json.loads(cleaned.strip())
+    except json.JSONDecodeError:
+        pass
+
+    # 3. Find the outermost JSON object or array in the text
+    match = re.search(r"[\[{]", raw)
+    if match:
+        candidate = raw[match.start():]
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            pass
+
+        # 4. Truncated JSON — try closing open braces/brackets
+        for trim in range(1, min(200, len(candidate))):
+            fragment = candidate[: len(candidate) - trim]
+            # Count unclosed brackets
+            opens = fragment.count("{") - fragment.count("}")
+            closes_arr = fragment.count("[") - fragment.count("]")
+            suffix = "]" * max(closes_arr, 0) + "}" * max(opens, 0)
+            if suffix:
+                try:
+                    return json.loads(fragment + suffix)
+                except json.JSONDecodeError:
+                    continue
+
+    # Nothing worked — raise so the caller can log the error
+    raise json.JSONDecodeError("Could not extract valid JSON from LLM response", raw, 0)
 
 
 class OllamaClient:
@@ -99,15 +152,7 @@ class OllamaClient:
             resp.raise_for_status()
             raw = resp.json()["response"]
 
-        try:
-            return json.loads(raw)
-        except json.JSONDecodeError:
-            # Try to extract JSON from markdown code blocks
-            if "```json" in raw:
-                raw = raw.split("```json")[1].split("```")[0]
-            elif "```" in raw:
-                raw = raw.split("```")[1].split("```")[0]
-            return json.loads(raw.strip())
+        return parse_llm_json(raw)
 
 
 SYSTEM_PROMPT_GENERATOR = """You are an expert QA engineer. Your job is to generate test cases
@@ -120,15 +165,18 @@ Generate test cases that cover:
 4. UI: Elements are visible, clickable, properly labeled
 
 For each test case, provide specific actions using these types:
-- navigate: Go to a URL (value = URL)
+- navigate: Go to a URL (value = URL string)
 - click: Click an element (selector = CSS selector)
-- type: Type text into an input (selector = CSS selector, value = text to type)
-- select: Select an option (selector = CSS selector, value = option value)
+- type: Type text into an input (selector = CSS selector, value = text string to type)
+- select: Select an option (selector = CSS selector, value = option value string)
 - assert: Check something (description = what to verify)
-- wait: Wait for something (value = milliseconds)
+- wait: Wait for something (value = milliseconds as a string, e.g. "1000")
 
-IMPORTANT: Be specific with selectors. Use the actual selectors from the page structure.
-Return ONLY valid JSON, no explanations."""
+CRITICAL RULES:
+- Use ONLY selectors that appear in the provided page structure. Do NOT invent selectors.
+- All "value" fields MUST be strings (use "1000" not 1000, "true" not true).
+- Each test MUST start with a "navigate" action to the page URL.
+- Return ONLY valid JSON, no explanations or markdown."""
 
 
 class OllamaTestGenerator(TestGenerator):

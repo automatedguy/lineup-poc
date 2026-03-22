@@ -20,6 +20,7 @@ from lineup.core.models import ScanReport
 from lineup.explorer.web import WebExplorer
 from lineup.executor.browser import BrowserExecutor
 from lineup.generator.claude import ClaudeBugAnalyzer, ClaudeClient, ClaudeTestGenerator
+from lineup.generator.gemini import GeminiBugAnalyzer, GeminiClient, GeminiTestGenerator
 from lineup.generator.llm import OllamaBugAnalyzer, OllamaClient, OllamaTestGenerator
 from lineup.reporter.html import HtmlReporter
 
@@ -36,7 +37,12 @@ async def run_scan(target_url: str, config: ScanConfig | None = None) -> ScanRep
 
     start_time = time.time()
 
-    model_name = config.claude.model if config.provider == "claude" else config.ollama.model
+    if config.provider == "claude":
+        model_name = config.claude.model
+    elif config.provider == "gemini":
+        model_name = config.gemini.model
+    else:
+        model_name = config.ollama.model
     console.print(Panel(
         f"[bold]line[/][bold bright_cyan]up[/] [dim]v0.1.0[/]\n"
         f"Target: {target_url}\n"
@@ -54,6 +60,14 @@ async def run_scan(target_url: str, config: ScanConfig | None = None) -> ScanRep
             console.print("  Make sure ANTHROPIC_API_KEY is set.")
             raise ConnectionError("Claude API not available")
         console.print(f"  [green]Connected[/] — model: {config.claude.model}\n")
+    elif config.provider == "gemini":
+        console.print("\n[bold]Step 0:[/] Checking Gemini API connection...")
+        llm_client = GeminiClient(config)
+        if not await llm_client.check_health():
+            console.print("[bold red]Error:[/] Cannot connect to Gemini API.")
+            console.print("  Make sure GOOGLE_API_KEY is set.")
+            raise ConnectionError("Gemini API not available")
+        console.print(f"  [green]Connected[/] — model: {config.gemini.model}\n")
     else:
         console.print("\n[bold]Step 0:[/] Checking Ollama connection...")
         llm_client = OllamaClient(config)
@@ -90,6 +104,8 @@ async def run_scan(target_url: str, config: ScanConfig | None = None) -> ScanRep
     console.print(f"\n[bold]Step 2:[/] Generating test cases for {len(snapshots)} pages...")
     if config.provider == "claude":
         generator = ClaudeTestGenerator(config)
+    elif config.provider == "gemini":
+        generator = GeminiTestGenerator(config)
     else:
         generator = OllamaTestGenerator(config)
     test_cases = await generator.generate(app_map, snapshots)
@@ -122,6 +138,8 @@ async def run_scan(target_url: str, config: ScanConfig | None = None) -> ScanRep
         console.print("[bold]Step 4:[/] Analyzing failures...")
         if config.provider == "claude":
             analyzer = ClaudeBugAnalyzer(config)
+        elif config.provider == "gemini":
+            analyzer = GeminiBugAnalyzer(config)
         else:
             analyzer = OllamaBugAnalyzer(config)
         bugs = await analyzer.analyze(results)

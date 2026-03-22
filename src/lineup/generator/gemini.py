@@ -1,6 +1,6 @@
-"""Test generator using Claude API.
+"""Test generator using Google Gemini API.
 
-Same logic as the Ollama generator but uses the Anthropic API.
+Same logic as the Claude generator but uses the Gemini API (free tier).
 """
 
 from __future__ import annotations
@@ -8,7 +8,8 @@ from __future__ import annotations
 import json
 import uuid
 
-import anthropic
+from google import genai
+from google.genai import types
 from rich.console import Console
 
 from lineup.core.config import ScanConfig
@@ -27,48 +28,52 @@ from lineup.generator.llm import SYSTEM_PROMPT_ANALYZER, SYSTEM_PROMPT_GENERATOR
 console = Console()
 
 
-class ClaudeClient:
-    """Thin wrapper around the Anthropic API."""
+class GeminiClient:
+    """Thin wrapper around the Google Gemini API."""
 
     def __init__(self, config: ScanConfig) -> None:
-        self.model = config.claude.model
-        self.max_tokens = config.claude.max_tokens
-        self.temperature = config.claude.temperature
-        self.client = anthropic.AsyncAnthropic(api_key=config.claude.api_key)
+        self.model = config.gemini.model
+        self.max_tokens = config.gemini.max_tokens
+        self.temperature = config.gemini.temperature
+        self.client = genai.Client(api_key=config.gemini.api_key)
 
     async def check_health(self) -> bool:
         """Verify the API key works by making a minimal request."""
         try:
-            await self.client.messages.create(
+            self.client.models.generate_content(
                 model=self.model,
-                max_tokens=10,
-                messages=[{"role": "user", "content": "ping"}],
+                contents="ping",
+                config=types.GenerateContentConfig(max_output_tokens=10),
             )
             return True
         except Exception as e:
-            console.print(f"  [red]Claude API error: {e}[/]")
+            console.print(f"  [red]Gemini API error: {e}[/]")
             return False
 
     async def generate_json(self, prompt: str, system: str = "") -> dict | list:
-        """Send a prompt to Claude and parse the JSON response."""
-        response = await self.client.messages.create(
+        """Send a prompt to Gemini and parse the JSON response."""
+        full_prompt = f"{system}\n\n{prompt}" if system else prompt
+
+        response = self.client.models.generate_content(
             model=self.model,
-            max_tokens=self.max_tokens,
-            temperature=self.temperature,
-            system=system,
-            messages=[{"role": "user", "content": prompt}],
+            contents=full_prompt,
+            config=types.GenerateContentConfig(
+                temperature=self.temperature,
+                max_output_tokens=self.max_tokens,
+                response_mime_type="application/json",
+            ),
         )
-        raw = response.content[0].text
+        raw = response.text
 
         return parse_llm_json(raw)
 
 
-class ClaudeTestGenerator(TestGenerator):
-    """Generates test cases using Claude API."""
+class GeminiTestGenerator(TestGenerator):
+    """Generates test cases using Gemini API."""
 
     def __init__(self, config: ScanConfig) -> None:
         self.config = config
-        self.client = ClaudeClient(config)
+        self.client = GeminiClient(config)
 
     def _build_page_context(self, snapshot: PageSnapshot) -> str:
         """Build a concise page description for the LLM."""
@@ -134,7 +139,9 @@ Generate 3-5 test cases for this page. Return JSON with this structure:
                 elif isinstance(result, list):
                     cases = result
                 else:
-                    console.print(f"    [red]Generation failed: unexpected response type ({type(result).__name__})[/]")
+                    console.print(
+                        f"    [red]Generation failed: unexpected response type ({type(result).__name__})[/]"
+                    )
                     continue
 
                 for tc_data in cases:
@@ -170,15 +177,15 @@ Generate 3-5 test cases for this page. Return JSON with this structure:
             if len(all_tests) >= self.config.max_test_cases:
                 break
 
-        return all_tests[:self.config.max_test_cases]
+        return all_tests[: self.config.max_test_cases]
 
 
-class ClaudeBugAnalyzer(BugAnalyzer):
-    """Analyzes test results using Claude to identify real bugs."""
+class GeminiBugAnalyzer(BugAnalyzer):
+    """Analyzes test results using Gemini to identify real bugs."""
 
     def __init__(self, config: ScanConfig) -> None:
         self.config = config
-        self.client = ClaudeClient(config)
+        self.client = GeminiClient(config)
 
     async def analyze(self, results: list[TestResult]) -> list[Bug]:
         """Analyze failed test results and extract bugs."""
@@ -226,7 +233,9 @@ Return JSON:
             elif isinstance(result, list):
                 bugs_data = result
             else:
-                console.print(f"  [red]Analysis failed: unexpected response type ({type(result).__name__})[/]")
+                console.print(
+                    f"  [red]Analysis failed: unexpected response type ({type(result).__name__})[/]"
+                )
                 return []
 
             bugs = []
