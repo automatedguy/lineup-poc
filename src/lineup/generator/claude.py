@@ -106,9 +106,21 @@ HTML structure (truncated):
             console.print(f"  [dim]Generating tests for[/] {snapshot.url}")
 
             context = self._build_page_context(snapshot)
+
+            # Tell the LLM what tests already exist so it doesn't repeat them
+            existing_names = [t.name for t in all_tests]
+            dedup_hint = ""
+            if existing_names:
+                dedup_hint = (
+                    "\n\nDo NOT generate tests similar to these already-generated ones:\n"
+                    + "\n".join(f"- {n}" for n in existing_names)
+                )
+
             prompt = f"""{context}
 
-Generate 3-5 test cases for this page. Return JSON with this structure:
+Generate 3-5 test cases for this page. Focus on functionality SPECIFIC to this page.{dedup_hint}
+
+Return JSON with this structure:
 {{
   "test_cases": [
     {{
@@ -137,9 +149,17 @@ Generate 3-5 test cases for this page. Return JSON with this structure:
                     console.print(f"    [red]Generation failed: unexpected response type ({type(result).__name__})[/]")
                     continue
 
+                seen_names = {t.name.lower().strip() for t in all_tests}
+                added = 0
                 for tc_data in cases:
                     if not isinstance(tc_data, dict):
                         continue
+
+                    name = tc_data.get("name", "Unnamed test")
+                    if name.lower().strip() in seen_names:
+                        continue
+                    seen_names.add(name.lower().strip())
+
                     actions = [
                         TestAction(
                             action=a.get("action", ""),
@@ -153,7 +173,7 @@ Generate 3-5 test cases for this page. Return JSON with this structure:
 
                     test_case = TestCase(
                         id=f"tc-{uuid.uuid4().hex[:8]}",
-                        name=tc_data.get("name", "Unnamed test"),
+                        name=name,
                         description=tc_data.get("description", ""),
                         target_url=snapshot.url,
                         actions=actions,
@@ -161,8 +181,9 @@ Generate 3-5 test cases for this page. Return JSON with this structure:
                         category=tc_data.get("category", "functional"),
                     )
                     all_tests.append(test_case)
+                    added += 1
 
-                console.print(f"    [green]{len(cases)} tests generated[/]")
+                console.print(f"    [green]{added} tests generated[/]")
 
             except Exception as e:
                 console.print(f"    [red]Generation failed: {e}[/]")

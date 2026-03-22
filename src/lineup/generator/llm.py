@@ -30,13 +30,68 @@ from lineup.core.interfaces import BugAnalyzer
 console = Console()
 
 
+def _strip_to_json(raw: str) -> str:
+    """Extract the JSON portion from an LLM response, stripping prose/markdown."""
+    # Markdown code blocks
+    if "```json" in raw:
+        raw = raw.split("```json")[1].split("```")[0]
+    elif "```" in raw:
+        raw = raw.split("```")[1].split("```")[0]
+
+    # Locate the first { or [
+    match = re.search(r"[\[{]", raw)
+    if match:
+        return raw[match.start():]
+    return raw.strip()
+
+
+def _repair_truncated_json(text: str) -> dict | list:
+    """Attempt to salvage a truncated JSON string by finding the last complete
+    array element and closing any open containers.
+
+    The key idea: walk backwards to find the last comma or closing brace that
+    marks the end of a complete element, discard everything after it, then
+    close the remaining open containers.
+    """
+    # Find the last successfully closed object/array element.
+    # We look for '},' or '}]' patterns that indicate a complete element boundary.
+    # Then we try closing from there.
+    best: dict | list | None = None
+
+    # Strategy: find every position of '}' or ']' and try closing from there
+    for i in range(len(text) - 1, 0, -1):
+        if text[i] not in ('}', ']', '"'):
+            continue
+
+        fragment = text[: i + 1]
+        # Strip a trailing comma if present
+        stripped = fragment.rstrip().rstrip(",")
+
+        opens = stripped.count("{") - stripped.count("}")
+        open_arr = stripped.count("[") - stripped.count("]")
+
+        if opens < 0 or open_arr < 0:
+            continue
+
+        suffix = "]" * open_arr + "}" * opens
+        try:
+            best = json.loads(stripped + suffix)
+            break
+        except json.JSONDecodeError:
+            continue
+
+    if best is not None:
+        return best
+
+    raise json.JSONDecodeError("Could not repair truncated JSON", text, 0)
+
+
 def parse_llm_json(raw: str) -> dict | list:
     """Best-effort JSON extraction from an LLM response.
 
-    Handles common issues:
-    - Markdown code blocks (```json ... ```)
-    - Leading/trailing prose around the JSON
-    - Truncated JSON (unclosed braces/brackets) from hitting max_tokens
+    Handles: markdown code blocks, surrounding prose, and truncated JSON
+    (e.g. from hitting max_tokens) by preserving as many complete elements
+    as possible.
     """
     # 1. Direct parse
     try:
@@ -44,42 +99,15 @@ def parse_llm_json(raw: str) -> dict | list:
     except json.JSONDecodeError:
         pass
 
-    # 2. Extract from markdown code blocks
-    cleaned = raw
-    if "```json" in cleaned:
-        cleaned = cleaned.split("```json")[1].split("```")[0]
-    elif "```" in cleaned:
-        cleaned = cleaned.split("```")[1].split("```")[0]
-
+    # 2. Strip markdown/prose, then try again
+    cleaned = _strip_to_json(raw)
     try:
-        return json.loads(cleaned.strip())
+        return json.loads(cleaned)
     except json.JSONDecodeError:
         pass
 
-    # 3. Find the outermost JSON object or array in the text
-    match = re.search(r"[\[{]", raw)
-    if match:
-        candidate = raw[match.start():]
-        try:
-            return json.loads(candidate)
-        except json.JSONDecodeError:
-            pass
-
-        # 4. Truncated JSON — try closing open braces/brackets
-        for trim in range(1, min(200, len(candidate))):
-            fragment = candidate[: len(candidate) - trim]
-            # Count unclosed brackets
-            opens = fragment.count("{") - fragment.count("}")
-            closes_arr = fragment.count("[") - fragment.count("]")
-            suffix = "]" * max(closes_arr, 0) + "}" * max(opens, 0)
-            if suffix:
-                try:
-                    return json.loads(fragment + suffix)
-                except json.JSONDecodeError:
-                    continue
-
-    # Nothing worked — raise so the caller can log the error
-    raise json.JSONDecodeError("Could not extract valid JSON from LLM response", raw, 0)
+    # 3. Truncated — repair by finding the last complete element
+    return _repair_truncated_json(cleaned)
 
 
 class OllamaClient:
@@ -222,9 +250,20 @@ HTML structure (truncated):
             console.print(f"  [dim]Generating tests for[/] {snapshot.url}")
 
             context = self._build_page_context(snapshot)
+
+            existing_names = [t.name for t in all_tests]
+            dedup_hint = ""
+            if existing_names:
+                dedup_hint = (
+                    "\n\nDo NOT generate tests similar to these already-generated ones:\n"
+                    + "\n".join(f"- {n}" for n in existing_names)
+                )
+
             prompt = f"""{context}
 
-Generate 3-5 test cases for this page. Return JSON with this structure:
+Generate 3-5 test cases for this page. Focus on functionality SPECIFIC to this page.{dedup_hint}
+
+Return JSON with this structure:
 {{
   "test_cases": [
     {{
@@ -253,9 +292,17 @@ Generate 3-5 test cases for this page. Return JSON with this structure:
                     console.print(f"    [red]Generation failed: unexpected response type ({type(result).__name__})[/]")
                     continue
 
+                seen_names = {t.name.lower().strip() for t in all_tests}
+                added = 0
                 for tc_data in cases:
                     if not isinstance(tc_data, dict):
                         continue
+
+                    name = tc_data.get("name", "Unnamed test")
+                    if name.lower().strip() in seen_names:
+                        continue
+                    seen_names.add(name.lower().strip())
+
                     actions = [
                         TestAction(
                             action=a.get("action", ""),
@@ -269,7 +316,7 @@ Generate 3-5 test cases for this page. Return JSON with this structure:
 
                     test_case = TestCase(
                         id=f"tc-{uuid.uuid4().hex[:8]}",
-                        name=tc_data.get("name", "Unnamed test"),
+                        name=name,
                         description=tc_data.get("description", ""),
                         target_url=snapshot.url,
                         actions=actions,
@@ -277,8 +324,9 @@ Generate 3-5 test cases for this page. Return JSON with this structure:
                         category=tc_data.get("category", "functional"),
                     )
                     all_tests.append(test_case)
+                    added += 1
 
-                console.print(f"    [green]{len(cases)} tests generated[/]")
+                console.print(f"    [green]{added} tests generated[/]")
 
             except Exception as e:
                 console.print(f"    [red]Generation failed: {e}[/]")

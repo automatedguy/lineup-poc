@@ -57,7 +57,7 @@ class GeminiConfig:
     model: str = field(
         default_factory=lambda: os.getenv("LINEUP_GEMINI_MODEL", "gemini-2.5-flash")
     )
-    max_tokens: int = 4096
+    max_tokens: int = 16384
     temperature: float = 0.1
 
 
@@ -69,7 +69,7 @@ class ClaudeConfig:
     model: str = field(
         default_factory=lambda: os.getenv("LINEUP_CLAUDE_MODEL", "claude-sonnet-4-20250514")
     )
-    max_tokens: int = 4096
+    max_tokens: int = 16384
     temperature: float = 0.1
 
 

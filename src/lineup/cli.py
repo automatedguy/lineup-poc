@@ -21,7 +21,10 @@ console = Console()
 @click.group()
 @click.version_option(version=__version__, prog_name="lineup")
 def main() -> None:
-    """Lineup — Autonomous Testing Platform."""
+    """The Lineup CLI entry point.
+
+    Groups all Lineup-related commands. Shows help and version info.
+    """
     pass
 
 

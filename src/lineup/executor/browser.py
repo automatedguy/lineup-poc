@@ -47,6 +47,43 @@ class BrowserExecutor(TestExecutor):
         await page.screenshot(path=path)
         return path
 
+    async def _resolve_locator(self, page: Page, action) -> "Locator":
+        """Resolve an action's selector to a visible Playwright locator.
+
+        Tries CSS selector first, then falls back to text-based and
+        role-based matching using the action description as a hint.
+        """
+        strategies: list[tuple[str, "Locator"]] = []
+
+        # 1. CSS selector (primary)
+        if action.selector:
+            strategies.append(("css", page.locator(action.selector).first))
+
+        # 2. Text-based fallback using the description
+        hint = action.description or action.value or ""
+        if hint:
+            strategies.append(("text", page.get_by_text(hint, exact=False).first))
+
+        # 3. Role-based fallback for buttons/links
+        if action.action == "click" and hint:
+            strategies.append(("role-button", page.get_by_role("button", name=hint).first))
+            strategies.append(("role-link", page.get_by_role("link", name=hint).first))
+
+        # 4. Placeholder-based fallback for inputs
+        if action.action == "type" and hint:
+            strategies.append(("placeholder", page.get_by_placeholder(hint, exact=False).first))
+            strategies.append(("label", page.get_by_label(hint, exact=False).first))
+
+        for _name, loc in strategies:
+            try:
+                await loc.wait_for(state="visible", timeout=3000)
+                return loc
+            except Exception:
+                continue
+
+        # Nothing found — raise with the original selector for error reporting
+        raise Exception(f"Element not found: {action.selector or hint}")
+
     async def execute(self, test_case: TestCase) -> TestResult:
         """Execute a single test case."""
         start_time = time.time()
@@ -70,18 +107,16 @@ class BrowserExecutor(TestExecutor):
                         await page.wait_for_timeout(1000)
 
                     elif action.action == "click":
-                        if not action.selector:
+                        if not action.selector and not action.description:
                             continue
-                        loc = page.locator(action.selector).first
-                        await loc.wait_for(state="visible", timeout=5000)
+                        loc = await self._resolve_locator(page, action)
                         await loc.click(timeout=5000)
                         await page.wait_for_timeout(500)
 
                     elif action.action == "type":
-                        if not action.selector:
+                        if not action.selector and not action.description:
                             continue
-                        loc = page.locator(action.selector).first
-                        await loc.wait_for(state="visible", timeout=5000)
+                        loc = await self._resolve_locator(page, action)
                         await loc.fill(action.value or "")
                         await page.wait_for_timeout(300)
 
