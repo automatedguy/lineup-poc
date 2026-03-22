@@ -23,6 +23,7 @@ from lineup.core.models import (
     TestResult,
 )
 from lineup.generator.llm import SYSTEM_PROMPT_ANALYZER, SYSTEM_PROMPT_GENERATOR, parse_llm_json
+from lineup.learning.store import LearningStore
 
 console = Console()
 
@@ -94,10 +95,12 @@ HTML structure (truncated):
 {snapshot.html_summary[:3000]}"""
 
     async def generate(
-        self, app_map: AppMap, snapshots: list[PageSnapshot]
+        self, app_map: AppMap, snapshots: list[PageSnapshot],
+        learning_store: LearningStore | None = None,
     ) -> list[TestCase]:
         """Generate test cases for discovered pages."""
         all_tests: list[TestCase] = []
+        domain = LearningStore.domain_from_url(app_map.base_url) if learning_store else ""
 
         for snapshot in snapshots:
             if not snapshot.elements:
@@ -106,6 +109,11 @@ HTML structure (truncated):
             console.print(f"  [dim]Generating tests for[/] {snapshot.url}")
 
             context = self._build_page_context(snapshot)
+
+            # Learning from previous scans
+            learning_hint = ""
+            if learning_store:
+                learning_hint = learning_store.build_learning_context(domain, snapshot.url)
 
             # Tell the LLM what tests already exist so it doesn't repeat them
             existing_names = [t.name for t in all_tests]
@@ -118,7 +126,7 @@ HTML structure (truncated):
 
             prompt = f"""{context}
 
-Generate 3-5 test cases for this page. Focus on functionality SPECIFIC to this page.{dedup_hint}
+Generate 3-5 test cases for this page. Focus on functionality SPECIFIC to this page.{learning_hint}{dedup_hint}
 
 Return JSON with this structure:
 {{

@@ -16,6 +16,7 @@ from rich.console import Console
 
 from lineup.core.config import ScanConfig
 from lineup.core.interfaces import TestGenerator
+from lineup.learning.store import LearningStore
 from lineup.core.models import (
     AppMap,
     Bug,
@@ -238,10 +239,12 @@ HTML structure (truncated):
 {snapshot.html_summary[:3000]}"""
 
     async def generate(
-        self, app_map: AppMap, snapshots: list[PageSnapshot]
+        self, app_map: AppMap, snapshots: list[PageSnapshot],
+        learning_store: LearningStore | None = None,
     ) -> list[TestCase]:
         """Generate test cases for discovered pages."""
         all_tests: list[TestCase] = []
+        domain = LearningStore.domain_from_url(app_map.base_url) if learning_store else ""
 
         for snapshot in snapshots:
             if not snapshot.elements:
@@ -250,6 +253,10 @@ HTML structure (truncated):
             console.print(f"  [dim]Generating tests for[/] {snapshot.url}")
 
             context = self._build_page_context(snapshot)
+
+            learning_hint = ""
+            if learning_store:
+                learning_hint = learning_store.build_learning_context(domain, snapshot.url)
 
             existing_names = [t.name for t in all_tests]
             dedup_hint = ""
@@ -261,7 +268,7 @@ HTML structure (truncated):
 
             prompt = f"""{context}
 
-Generate 3-5 test cases for this page. Focus on functionality SPECIFIC to this page.{dedup_hint}
+Generate 3-5 test cases for this page. Focus on functionality SPECIFIC to this page.{learning_hint}{dedup_hint}
 
 Return JSON with this structure:
 {{

@@ -22,6 +22,7 @@ from lineup.executor.browser import BrowserExecutor
 from lineup.generator.claude import ClaudeBugAnalyzer, ClaudeClient, ClaudeTestGenerator
 from lineup.generator.gemini import GeminiBugAnalyzer, GeminiClient, GeminiTestGenerator
 from lineup.generator.llm import OllamaBugAnalyzer, OllamaClient, OllamaTestGenerator
+from lineup.learning.store import LearningStore
 from lineup.reporter.html import HtmlReporter
 
 console = Console()
@@ -100,6 +101,13 @@ async def run_scan(target_url: str, config: ScanConfig | None = None) -> ScanRep
         console.print("[bold red]No pages could be explored. Aborting.[/]")
         raise RuntimeError("Exploration found no usable pages")
 
+    # --- Learning store ---
+    store = LearningStore(config.output_dir)
+    domain = store.domain_from_url(target_url)
+    scan_number = store.get_scan_count(domain) + 1
+    if scan_number > 1:
+        console.print(f"  [dim]Scan #{scan_number} for {domain} — using learning from previous scans[/]")
+
     # --- Step 2: Generate test cases ---
     console.print(f"\n[bold]Step 2:[/] Generating test cases for {len(snapshots)} pages...")
     if config.provider == "claude":
@@ -108,7 +116,7 @@ async def run_scan(target_url: str, config: ScanConfig | None = None) -> ScanRep
         generator = GeminiTestGenerator(config)
     else:
         generator = OllamaTestGenerator(config)
-    test_cases = await generator.generate(app_map, snapshots)
+    test_cases = await generator.generate(app_map, snapshots, learning_store=store)
     console.print(f"  [green]{len(test_cases)} test cases generated[/]\n")
 
     if not test_cases:
@@ -144,6 +152,14 @@ async def run_scan(target_url: str, config: ScanConfig | None = None) -> ScanRep
             analyzer = OllamaBugAnalyzer(config)
         bugs = await analyzer.analyze(results)
 
+    # --- Step 4b: Save learning ---
+    store.record_results(domain, results)
+    if bugs:
+        store.record_bugs(domain, bugs)
+        active_titles = {b.title for b in bugs}
+        store.mark_fixed_bugs(domain, active_titles)
+    console.print(f"  [dim]Learning saved for {domain}[/]")
+
     # --- Step 5: Generate report ---
     console.print(f"\n[bold]Step 5:[/] Generating report...")
     report = ScanReport(
@@ -162,6 +178,9 @@ async def run_scan(target_url: str, config: ScanConfig | None = None) -> ScanRep
     reporter = HtmlReporter()
     report_path = await reporter.generate_report(report, config.output_dir)
     console.print(f"  [green]Report saved:[/] {report_path}\n")
+
+    store.record_scan(report)
+    store.close()
 
     # --- Summary ---
     console.print(Panel(
