@@ -33,6 +33,7 @@ def main() -> None:
 @click.option("--output", default="./lineup-output", help="Output directory")
 @click.option("--headed", is_flag=True, help="Run browser in visible mode")
 @click.option("--ollama-url", default=None, help="Ollama API URL (default: http://localhost:11434)")
+@click.option("--provider", default=None, type=click.Choice(["ollama", "claude"]), help="LLM provider (default: ollama)")
 def scan(
     url: str,
     model: str | None,
@@ -41,6 +42,7 @@ def scan(
     output: str,
     headed: bool,
     ollama_url: str | None,
+    provider: str | None,
 ) -> None:
     """Scan a web application for bugs.
 
@@ -51,8 +53,13 @@ def scan(
     config.explorer.max_depth = depth
     config.max_test_cases = max_tests
 
+    if provider:
+        config.provider = provider
     if model:
-        config.ollama.model = model
+        if config.provider == "claude":
+            config.claude.model = model
+        else:
+            config.ollama.model = model
     if headed:
         config.browser.headless = False
     if ollama_url:

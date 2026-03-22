@@ -19,6 +19,7 @@ from lineup.core.config import ScanConfig
 from lineup.core.models import ScanReport
 from lineup.explorer.web import WebExplorer
 from lineup.executor.browser import BrowserExecutor
+from lineup.generator.claude import ClaudeBugAnalyzer, ClaudeClient, ClaudeTestGenerator
 from lineup.generator.llm import OllamaBugAnalyzer, OllamaClient, OllamaTestGenerator
 from lineup.reporter.html import HtmlReporter
 
@@ -35,22 +36,33 @@ async def run_scan(target_url: str, config: ScanConfig | None = None) -> ScanRep
 
     start_time = time.time()
 
+    model_name = config.claude.model if config.provider == "claude" else config.ollama.model
     console.print(Panel(
         f"[bold]line[/][bold bright_cyan]up[/] [dim]v0.1.0[/]\n"
         f"Target: {target_url}\n"
-        f"Model: {config.ollama.model}",
+        f"Provider: {config.provider}\n"
+        f"Model: {model_name}",
         border_style="cyan",
     ))
 
-    # --- Step 0: Check Ollama ---
-    console.print("\n[bold]Step 0:[/] Checking Ollama connection...")
-    client = OllamaClient(config)
-    if not await client.check_health():
-        console.print(f"[bold red]Error:[/] Cannot connect to Ollama at {config.ollama.base_url}")
-        console.print(f"  Make sure Ollama is running and model '{config.ollama.model}' is pulled.")
-        console.print(f"  Run: ollama pull {config.ollama.model}")
-        raise ConnectionError(f"Ollama not available at {config.ollama.base_url}")
-    console.print(f"  [green]Connected[/] — model: {config.ollama.model}\n")
+    # --- Step 0: Check LLM connection ---
+    if config.provider == "claude":
+        console.print("\n[bold]Step 0:[/] Checking Claude API connection...")
+        llm_client = ClaudeClient(config)
+        if not await llm_client.check_health():
+            console.print("[bold red]Error:[/] Cannot connect to Claude API.")
+            console.print("  Make sure ANTHROPIC_API_KEY is set.")
+            raise ConnectionError("Claude API not available")
+        console.print(f"  [green]Connected[/] — model: {config.claude.model}\n")
+    else:
+        console.print("\n[bold]Step 0:[/] Checking Ollama connection...")
+        llm_client = OllamaClient(config)
+        if not await llm_client.check_health():
+            console.print(f"[bold red]Error:[/] Cannot connect to Ollama at {config.ollama.base_url}")
+            console.print(f"  Make sure Ollama is running and model '{config.ollama.model}' is pulled.")
+            console.print(f"  Run: ollama pull {config.ollama.model}")
+            raise ConnectionError(f"Ollama not available at {config.ollama.base_url}")
+        console.print(f"  [green]Connected[/] — model: {config.ollama.model}\n")
 
     # --- Step 1: Explore ---
     console.print("[bold]Step 1:[/] Exploring application...")
@@ -76,7 +88,10 @@ async def run_scan(target_url: str, config: ScanConfig | None = None) -> ScanRep
 
     # --- Step 2: Generate test cases ---
     console.print(f"\n[bold]Step 2:[/] Generating test cases for {len(snapshots)} pages...")
-    generator = OllamaTestGenerator(config)
+    if config.provider == "claude":
+        generator = ClaudeTestGenerator(config)
+    else:
+        generator = OllamaTestGenerator(config)
     test_cases = await generator.generate(app_map, snapshots)
     console.print(f"  [green]{len(test_cases)} test cases generated[/]\n")
 
@@ -105,7 +120,10 @@ async def run_scan(target_url: str, config: ScanConfig | None = None) -> ScanRep
     bugs = []
     if failed > 0:
         console.print("[bold]Step 4:[/] Analyzing failures...")
-        analyzer = OllamaBugAnalyzer(config)
+        if config.provider == "claude":
+            analyzer = ClaudeBugAnalyzer(config)
+        else:
+            analyzer = OllamaBugAnalyzer(config)
         bugs = await analyzer.analyze(results)
 
     # --- Step 5: Generate report ---
